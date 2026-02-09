@@ -194,6 +194,27 @@ def logout(message):
                      reply_markup=types.ReplyKeyboardRemove())
 
 
+import threading
+from flask import Flask
+
+# Dummy app to satisfy Leapcell's port requirement
+health_app = Flask(__name__)
+
+
+@health_app.route('/')
+def health():
+    return "Bot is alive!", 200
+
+
+def run_health_check():
+    # Leapcell provides the PORT env var automatically
+    port = int(os.environ.get("PORT", 8080))
+    health_app.run(host='0.0.0.0', port=port)
+
+
 if __name__ == "__main__":
-    print("Bot is running...")
+    # Start the health check in a background thread
+    threading.Thread(target=run_health_check, daemon=True).start()
+
+    print("Bot is starting...")
     bot.polling(none_stop=True)
