@@ -6,10 +6,6 @@ import psycopg2
 from psycopg2 import Error
 import telebot
 from telebot import types
-from dotenv import load_dotenv
-
-# Load environment variables from .env file if it exists
-load_dotenv()
 
 # ------------------------------------------------------------
 # Environment Variables Configuration
