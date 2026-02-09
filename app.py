@@ -7,7 +7,6 @@ from psycopg2 import Error
 import telebot
 from telebot import types
 
-
 # ------------------------------------------------------------
 # 1. Configuration & Setup
 # ------------------------------------------------------------
