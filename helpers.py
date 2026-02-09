@@ -3,6 +3,7 @@ from psycopg2 import Error
 from functools import wraps
 from config import DB_URI, user_sessions
 
+
 def get_db_connection():
     try:
         return psycopg2.connect(DB_URI)
