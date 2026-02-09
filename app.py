@@ -8,9 +8,7 @@ from psycopg2 import Error
 import telebot
 from telebot import types
 from flask import Flask
-from dotenv import load_dotenv
 
-load_dotenv()
 
 # ------------------------------------------------------------
 # 1. FLASK HEALTH CHECK (To prevent shutdown)
