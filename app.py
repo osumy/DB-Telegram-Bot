@@ -1,19 +1,40 @@
 import os
-from functools import wraps
+import threading
 import psycopg2
 from psycopg2 import Error
 import telebot
 from telebot import types
+from flask import Flask
+
+# ------------------------------------------------------------
+# 1. LEAPCELL HEALTH CHECK CONFIGURATION
+# ------------------------------------------------------------
+# Leapcell needs a web server to respond 200 OK to health checks
+server = Flask(__name__)
+
+
+@server.errorhandler(404)
+@server.route("/", defaults={'path': ''})
+@server.route("/<path:path>")
+def health_check(path):
+    # This handles Leapcell's /kaithhealthcheck and any other verification pings
+    return "Bot is Active", 200
+
+
+def run_flask():
+    # Leapcell provides the PORT environment variable (default 8080)
+    port = int(os.environ.get("PORT", 8080))
+    server.run(host="0.0.0.0", port=port)
 
 
 # ------------------------------------------------------------
-# Configurations
+# 2. BOT CONFIGURATIONS
 # ------------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DB_URI = os.environ.get("DB_URI")
 
 if not BOT_TOKEN or not DB_URI:
-    raise RuntimeError("Missing BOT_TOKEN or DB_URI in .env file")
+    raise RuntimeError("Missing BOT_TOKEN or DB_URI in Environment Variables")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -22,7 +43,7 @@ user_sessions = {}
 
 
 # ------------------------------------------------------------
-# Database Helpers
+# 3. DATABASE HELPERS
 # ------------------------------------------------------------
 def get_db_connection():
     try:
@@ -51,7 +72,7 @@ def get_user_by_phone(phone):
 
 
 # ------------------------------------------------------------
-# Keyboards (Persian)
+# 4. KEYBOARDS (PERSIAN)
 # ------------------------------------------------------------
 def get_main_keyboard(role):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -70,7 +91,7 @@ def get_main_keyboard(role):
 
 
 # ------------------------------------------------------------
-# Auth Flow
+# 5. BOT HANDLERS (LOGIC)
 # ------------------------------------------------------------
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -86,7 +107,6 @@ def start(message):
 def process_login(message):
     chat_id = message.chat.id
     phone = message.text.strip()
-
     user_data = get_user_by_phone(phone)
 
     if user_data:
@@ -106,12 +126,10 @@ def process_login(message):
         bot.send_message(chat_id, "❌ کاربری با این شماره یافت نشد. لطفا دوباره /start را بزنید.")
 
 
-# ------------------------------------------------------------
-# Ordering Feature (For Admin & Customer)
-# ------------------------------------------------------------
 @bot.message_handler(func=lambda m: m.text == "🛒 ثبت سفارش جدید")
 def order_start(message):
     conn = get_db_connection()
+    if not conn: return
     cur = conn.cursor()
     cur.execute("SELECT id, name, price FROM menu_items WHERE is_available = TRUE")
     items = cur.fetchall()
@@ -133,25 +151,30 @@ def order_start(message):
 def process_order_placement(message):
     chat_id = message.chat.id
     session = user_sessions.get(chat_id)
+    if not session:
+        bot.send_message(chat_id, "لطفا ابتدا وارد شوید /start")
+        return
 
     try:
         item_id, qty = map(int, message.text.split(':'))
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Get Price
         cur.execute("SELECT price FROM menu_items WHERE id = %s", (item_id,))
-        price = cur.fetchone()[0]
+        price_row = cur.fetchone()
+        if not price_row:
+            bot.send_message(chat_id, "کد غذا معتبر نیست.")
+            return
+
+        price = price_row[0]
         total = price * qty
 
-        # Insert Order
         cur.execute(
             "INSERT INTO orders (customer_id, status, total_price, order_type) VALUES (%s, 'pending', %s, 'delivery') RETURNING id",
             (session['customer_id'], total)
         )
         order_id = cur.fetchone()[0]
 
-        # Insert Order Item
         cur.execute(
             "INSERT INTO order_items (order_id, menu_item_id, quantity, unit_price, total_price) VALUES (%s, %s, %s, %s, %s)",
             (order_id, item_id, qty, price, total)
@@ -162,12 +185,9 @@ def process_order_placement(message):
     except Exception as e:
         bot.send_message(chat_id, "❌ خطا در ثبت سفارش. فرمت صحیح (کد:تعداد) را رعایت کنید.")
     finally:
-        conn.close()
+        if conn: conn.close()
 
 
-# ------------------------------------------------------------
-# Admin Management
-# ------------------------------------------------------------
 @bot.message_handler(func=lambda m: m.text == "👥 لیست مشتریان")
 def list_customers(message):
     session = user_sessions.get(message.chat.id)
@@ -190,34 +210,20 @@ def list_customers(message):
 @bot.message_handler(func=lambda m: m.text == "🚪 خروج")
 def logout(message):
     user_sessions.pop(message.chat.id, None)
-    bot.send_message(message.chat.id, "شما از حساب خارج شدید. برای ورود مجدد /start را بزنید.",
-                     reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, "شما از حساب خارج شدید.", reply_markup=types.ReplyKeyboardRemove())
 
-import os
-import threading
-import psycopg2
-import telebot
-from flask import Flask
-from telebot import types
 
-# --- LEAPCELL HEALTH CHECK ---
-# This prevents the "Connection Failed" error and the 404 health check loop
-server = Flask(__name__)
-
-@server.errorhandler(404)
-@server.route("/", defaults={'path': ''})
-@server.route("/<path:path>")
-def catch_all(path):
-    return "Bot is Active", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    server.run(host="0.0.0.0", port=port)
-
+# ------------------------------------------------------------
+# 6. MAIN EXECUTION
+# ------------------------------------------------------------
 if __name__ == "__main__":
-    # Start the health check in a background thread
+    # Start Flask in a background thread so it doesn't block the bot
     threading.Thread(target=run_flask, daemon=True).start()
 
-    print("Bot is starting...")
+    print("Bot is starting and Health Check is active on port 8080...")
+
+    # Remove any old webhooks (prevents 409 Conflict)
     bot.remove_webhook()
+
+    # Start the bot
     bot.polling(none_stop=True)
